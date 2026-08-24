@@ -6,10 +6,10 @@
 <title>EPA floor sketch — prototype</title>
 <!-- iPad: "Deel → Zet op beginscherm" opens this full-screen without Safari chrome -->
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="EPA Schets" />
 <meta name="format-detection" content="telephone=no" />
-<meta name="theme-color" content="#0B121C" />
+<meta name="theme-color" content="#FFFFFF" />
 <link rel="manifest" href="manifest.webmanifest" />
 <!-- Zonder dit icoon zet iOS een schermafdruk van de pagina op het beginscherm. -->
 <link rel="apple-touch-icon" href="icon-180.png" />
@@ -332,11 +332,11 @@ console.warn( 'Scripts "build/three.js" and "build/three.min.js" are deprecated 
 
 </script>
 <style>
-  html, body { margin: 0; padding: 0; background: #0B121C; color: #E7EEF5;
+  html, body { margin: 0; padding: 0; background: #FFFFFF; color: #13211A;
     font-family: ui-sans-serif, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; }
   #root { padding: 16px; }
   #boot { padding: 40px; font-size: 14px; line-height: 1.6; }
-  code { font-family: "Cascadia Code", ui-monospace, Consolas, monospace; color: #F5B942; }
+  code { font-family: "Cascadia Code", ui-monospace, Consolas, monospace; color: #12783F; }
 
   /* iPad / touch ------------------------------------------------------- */
   /* iOS zooms the whole page when a focused input is under 16px, which
@@ -442,26 +442,40 @@ const WINDOW_DEFAULT_W = 1.5;
 const WINDOW_DEFAULT_H = 1.0;
 const WINDOW_DEFAULT_SILL = 0.9; // borstwering: height of the sill above the floor
 const WINDOW_PICK_PX = 18;
+
+// Hoeveel stappen de ongedaan-knop onthoudt. Elke stap is een kopie van de
+// tekening, dus dit is een geheugengrens, geen willekeurig getal.
+const HISTORY_MAX = 50;
+// Licht thema: wit papier met groen als accent. Alles wat kleur nodig heeft
+// haalt die hier op, dus een thema omzetten is één blok aanpassen.
 const COLORS = {
-  bg: "#0B121C",
-  panel: "#101B28",
-  panelBorder: "#1E2E3D",
-  gridMajor: "rgba(120,165,205,0.20)",
-  roomFill: "rgba(70,140,190,0.16)",
-  roomFillActive: "rgba(245,185,66,0.10)",
-  roomStroke: "#5AA7D6",
-  roomStrokeActive: "#F5B942",
-  point: "#F5B942",
-  text: "#E7EEF5",
-  textMuted: "#7C93A8",
-  accent: "#F5B942",
-  danger: "#E0645A",
-  good: "#7CC28C",
-  wallChip: "#5AA7D6",
-  floorChip: "#7CC28C",
-  roofChip: "#C48AE0",
-  windowChip: "#8ED8F8",
-  axis: "#8AA6BC"
+  bg: "#FFFFFF",
+  panel: "#F3F7F4",
+  // vlakken die op het papier liggen: invoervelden, knoppen, de tekenkaart
+  panelBorder: "#D5E2D9",
+  inputBg: "#FFFFFF",
+  btnBg: "#FFFFFF",
+  canvasBg: "#FAFCFA",
+  onAccent: "#FFFFFF",
+  // zwevende paneeltjes boven de tekening, en de waas achter een dialoog
+  overlay: "rgba(255,255,255,0.88)",
+  scrim: "rgba(19,33,26,0.32)",
+  gridMajor: "rgba(18,120,63,0.16)",
+  roomFill: "rgba(43,111,151,0.10)",
+  roomFillActive: "rgba(18,120,63,0.12)",
+  roomStroke: "#2B6F97",
+  roomStrokeActive: "#12783F",
+  point: "#12783F",
+  text: "#13211A",
+  textMuted: "#5C7266",
+  accent: "#12783F",
+  danger: "#C0392B",
+  good: "#2E8B57",
+  wallChip: "#2B6F97",
+  floorChip: "#2E8B57",
+  roofChip: "#7A4FB6",
+  windowChip: "#1B87B8",
+  axis: "#7B8F84"
 };
 const monoFont = '"SF Mono", "Cascadia Code", "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';
 const sansFont = 'ui-sans-serif, "Inter", system-ui, -apple-system, "Segoe UI", sans-serif';
@@ -984,7 +998,7 @@ function makeLabelSprite(text, color) {
   canvas.width = Math.ceil(ctx.measureText(text).width) + padX * 2;
   canvas.height = fontPx + padY * 2;
   ctx.font = font; // resizing the canvas resets the context state
-  ctx.fillStyle = "rgba(13,22,34,0.88)";
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
   roundRectPath(ctx, 0, 0, canvas.width, canvas.height, 12);
   ctx.fill();
   ctx.strokeStyle = color;
@@ -1041,10 +1055,10 @@ function Field({
     }
   }, " *")), source === "bag" && /*#__PURE__*/React.createElement(Badge, {
     label: "BAG",
-    color: "#4FA0C4"
+    color: "#2B6F97"
   }), source === "3dbag" && /*#__PURE__*/React.createElement(Badge, {
     label: "3D BAG",
-    color: "#8E7CE0"
+    color: "#7A4FB6"
   }), source === "manual" && /*#__PURE__*/React.createElement(Badge, {
     label: "manual",
     color: COLORS.textMuted
@@ -1070,7 +1084,7 @@ function Badge({
 const inputBase = {
   width: "100%",
   boxSizing: "border-box",
-  background: "#0D1622",
+  background: COLORS.inputBg,
   border: `1px solid ${COLORS.panelBorder}`,
   color: COLORS.text,
   borderRadius: 7,
@@ -1081,8 +1095,8 @@ const inputBase = {
 };
 function btnStyle(active, danger) {
   return {
-    background: active ? COLORS.accent : danger ? "transparent" : "#16222F",
-    color: active ? "#151007" : danger ? COLORS.danger : COLORS.text,
+    background: active ? COLORS.accent : danger ? "transparent" : COLORS.btnBg,
+    color: active ? COLORS.onAccent : danger ? COLORS.danger : COLORS.text,
     border: `1px solid ${active ? COLORS.accent : danger ? COLORS.danger : COLORS.panelBorder}`,
     borderRadius: 7,
     padding: "9px 14px",
@@ -1098,7 +1112,7 @@ function Pill({
     style: {
       fontSize: 11,
       color: COLORS.textMuted,
-      background: "#0D1622",
+      background: COLORS.inputBg,
       border: `1px solid ${COLORS.panelBorder}`,
       borderRadius: 20,
       padding: "3px 9px"
@@ -1221,7 +1235,7 @@ function MeasurementPrompt({
     style: {
       position: "absolute",
       inset: 0,
-      background: "rgba(5,9,14,0.55)",
+      background: COLORS.scrim,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
@@ -1356,7 +1370,7 @@ function RectPrompt({
     style: {
       position: "absolute",
       inset: 0,
-      background: "rgba(5,9,14,0.55)",
+      background: COLORS.scrim,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
@@ -1715,7 +1729,7 @@ function AddressTab({
     }
   }, "Adresgegevens"), OFFLINE_BUILD && /*#__PURE__*/React.createElement("div", {
     style: {
-      background: "rgba(245,185,66,0.10)",
+      background: "rgba(18,120,63,0.12)",
       border: `1px solid ${COLORS.accent}55`,
       color: COLORS.accent,
       borderRadius: 7,
@@ -1726,7 +1740,7 @@ function AddressTab({
     }
   }, "Testversie voor de iPad \u2014 deze omgeving staat geen externe verbindingen toe, dus de BAG-zoekbalk is uitgeschakeld. Vul het adres met de hand in; al het tekenwerk, de laserinvoer en de export werken wel."), apiError && /*#__PURE__*/React.createElement("div", {
     style: {
-      background: "rgba(224,100,90,0.10)",
+      background: "rgba(192,57,43,0.10)",
       border: `1px solid ${COLORS.danger}55`,
       color: COLORS.danger,
       borderRadius: 7,
@@ -1770,7 +1784,7 @@ function AddressTab({
       left: 0,
       right: 0,
       zIndex: 10,
-      background: "#0D1622",
+      background: COLORS.inputBg,
       border: `1px solid ${COLORS.panelBorder}`,
       borderRadius: 8,
       overflow: "hidden"
@@ -2011,18 +2025,18 @@ function ThreeDPreview({
     const mount = mountRef.current;
     if (!mount) return;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0b121c);
+    scene.background = new THREE.Color(0xf2f6f3);
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
     const renderer = new THREE.WebGLRenderer({
       antialias: true
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
-    scene.add(new THREE.HemisphereLight(0xbcd6ee, 0x1a2230, 0.9));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xd7e3da, 0.95));
     const dir = new THREE.DirectionalLight(0xffffff, 1.1);
     dir.position.set(6, 10, 4);
     scene.add(dir);
-    scene.add(new THREE.GridHelper(40, 40, 0x2c4258, 0x1a2a38));
+    scene.add(new THREE.GridHelper(40, 40, 0xa8c4b2, 0xd8e4dc));
     const group = new THREE.Group();
     scene.add(group);
     const orbit = {
@@ -2228,7 +2242,7 @@ function ThreeDPreview({
       extrude.rotateX(-Math.PI / 2);
       extrude.translate(0, base, 0); // lift onto its verdieping
       const mesh = new THREE.Mesh(extrude, new THREE.MeshStandardMaterial({
-        color: 0x3f6f95,
+        color: 0x2b6f97,
         transparent: true,
         opacity: 0.55,
         side: THREE.DoubleSide
@@ -2240,7 +2254,7 @@ function ThreeDPreview({
       group.add(mesh);
       const edges = new THREE.EdgesGeometry(extrude);
       group.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
-        color: 0xf5b942
+        color: 0x12783f
       })));
 
       // ramen — thin light-blue slabs standing proud of the gevel
@@ -2252,7 +2266,7 @@ function ThreeDPreview({
             const py = seg.a.y + seg.dir.y * mToPx(win.alongM);
             const geo = new THREE.BoxGeometry(win.widthM, win.heightM, 0.14);
             const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-              color: 0x8ed8f8,
+              color: 0x1b87b8,
               transparent: true,
               opacity: 0.6,
               side: THREE.DoubleSide
@@ -2262,7 +2276,7 @@ function ThreeDPreview({
             m.rotation.y = Math.atan2(-seg.dir.y, seg.dir.x);
             group.add(m);
             const outline = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({
-              color: 0xbfeaff
+              color: 0x0f6d95
             }));
             outline.position.copy(m.position);
             outline.rotation.copy(m.rotation);
@@ -2293,7 +2307,7 @@ function ThreeDPreview({
         });
         rGeo.translate(x0, base, z0);
         const rMesh = new THREE.Mesh(rGeo, new THREE.MeshStandardMaterial({
-          color: 0xc48ae0,
+          color: 0x7a4fb6,
           transparent: true,
           opacity: 0.7,
           side: THREE.DoubleSide
@@ -2309,7 +2323,7 @@ function ThreeDPreview({
         group.add(rMesh);
         const rEdges = new THREE.EdgesGeometry(rGeo);
         group.add(new THREE.LineSegments(rEdges, new THREE.LineBasicMaterial({
-          color: 0xc48ae0
+          color: 0x7a4fb6
         })));
 
         // dakkapellen
@@ -2320,14 +2334,14 @@ function ThreeDPreview({
           geo.setAttribute("position", new THREE.Float32BufferAttribute(md.positions, 3));
           geo.computeVertexNormals();
           const mat = new THREE.MeshStandardMaterial({
-            color: md.fits ? 0xf5b942 : 0xe0645a,
+            color: md.fits ? 0x12783f : 0xc0392b,
             transparent: true,
             opacity: 0.85,
             side: THREE.DoubleSide
           });
           group.add(new THREE.Mesh(geo, mat));
           group.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({
-            color: md.fits ? 0xffd782 : 0xe0645a
+            color: md.fits ? 0x2e8b57 : 0xc0392b
           })));
         });
       }
@@ -3226,7 +3240,7 @@ function InstallationsPanel({
         fontSize: 12.5,
         color: COLORS.textMuted,
         lineHeight: 1.5,
-        background: "#0D1622",
+        background: COLORS.inputBg,
         border: `1px dashed ${COLORS.panelBorder}`,
         borderRadius: 8,
         padding: "14px 12px"
@@ -3284,7 +3298,7 @@ function InstallationsPanel({
       key: s.key,
       onClick: () => setSectionKey(s.key),
       style: {
-        background: "#16222F",
+        background: COLORS.btnBg,
         color: COLORS.text,
         border: `1px solid ${COLORS.panelBorder}`,
         borderRadius: 7,
@@ -3336,7 +3350,7 @@ function InstallationsPanel({
       borderRadius: 7,
       marginBottom: 6,
       cursor: "pointer",
-      background: "#0D1622",
+      background: COLORS.inputBg,
       border: `1px solid ${COLORS.panelBorder}`
     }
   }, /*#__PURE__*/React.createElement("span", {
@@ -3374,7 +3388,7 @@ function BagInfoBox({
       top: 12,
       right: 12,
       zIndex: 6,
-      background: "rgba(16,27,40,0.72)",
+      background: COLORS.overlay,
       backdropFilter: "blur(6px)",
       WebkitBackdropFilter: "blur(6px)",
       border: `1px solid ${COLORS.panelBorder}`,
@@ -3951,15 +3965,15 @@ function chipMeta(c, displayName) {
   });
   switch (c.kind) {
     case "wall":
-      return sized(displayName || L.replace("Gevel ", "G"), COLORS.wallChip, "rgba(90,167,214,0.16)");
+      return sized(displayName || L.replace("Gevel ", "G"), COLORS.wallChip, "rgba(43,111,151,0.14)");
     case "floor":
-      return sized("Vloer", COLORS.floorChip, "rgba(124,194,140,0.16)");
+      return sized("Vloer", COLORS.floorChip, "rgba(46,139,87,0.14)");
     case "roof":
-      return sized(L.replace("Dakvlak ", "Dak "), COLORS.roofChip, "rgba(196,138,224,0.16)");
+      return sized(L.replace("Dakvlak ", "Dak "), COLORS.roofChip, "rgba(122,79,182,0.14)");
     case "gable":
-      return sized(displayName || L.replace("Topgevel ", "TG"), COLORS.wallChip, "rgba(90,167,214,0.09)");
+      return sized(displayName || L.replace("Topgevel ", "TG"), COLORS.wallChip, "rgba(43,111,151,0.09)");
     case "dormer":
-      return sized(L.replace("Dakkapel ", "DK"), COLORS.accent, "rgba(245,185,66,0.18)");
+      return sized(L.replace("Dakkapel ", "DK"), COLORS.accent, "rgba(18,120,63,0.16)");
     default:
       return sized(L || c.kind, COLORS.textMuted, "transparent");
   }
@@ -3995,11 +4009,15 @@ function recomputeRoofAreas(room) {
 }
 function FloorSketchTab({
   project,
-  onChangeRooms,
-  onChangeWallHeight,
-  onChangeFrontFace,
-  onChangeInstallations,
-  onChangeLevelCount,
+  // De apply*-functies schrijven rechtstreeks naar het project. Alles in dit
+  // bestand gebruikt de onChange*-wrappers hieronder, die eerst een stap op
+  // de ongedaan-stapel leggen.
+  onChangeRooms: applyRooms,
+  onChangeWallHeight: applyWallHeight,
+  onChangeFrontFace: applyFrontFace,
+  onChangeInstallations: applyInstallations,
+  onChangeLevelCount: applyLevelCount,
+  onRestore,
   onFinish,
   onBack
 }) {
@@ -4042,6 +4060,116 @@ function FloorSketchTab({
   const pinchRef = useRef(null);
   const lenInputRef = useRef(null);
   const suppressClickRef = useRef(false); // a finished drag must not also place a point
+
+  // ---- ongedaan maken -------------------------------------------------
+  // Voor elke wijziging gaat de huidige tekening op een stapel; de knop en
+  // ⌘/Ctrl+Z zetten de bovenste terug. Een sleep schrijft tientallen keren
+  // per seconde, dus die telt als één stap: bij pointerdown gaat het slot
+  // dicht en pas bij pointerup weer open.
+  const [history, setHistory] = useState([]);
+  const dragLockRef = useRef(false);
+  const dragPushedRef = useRef(false);
+  function snapshotProject() {
+    return {
+      rooms: project.rooms,
+      wallHeight: project.wallHeight,
+      frontFace: project.frontFace,
+      installations: project.installations,
+      levelCount: project.levelCount
+    };
+  }
+  function pushHistory() {
+    setHistory(h => {
+      const snap = snapshotProject();
+      const last = h[h.length - 1];
+      // Twee schrijfacties in één handler (bv. rooms én verdiepingen) zien
+      // dezelfde project-prop; dat is één stap terug, geen twee.
+      if (last && Object.keys(snap).every(k => last[k] === snap[k])) return h;
+      return [...h, snap].slice(-HISTORY_MAX);
+    });
+  }
+  function recordChange() {
+    // Een pointerup buiten het canvas laat het slot dicht staan; zonder een
+    // lopende sleep hoort het altijd open te zijn.
+    if (dragLockRef.current && !dragChip && !dragWall && !dragDormer && !dragWindow) {
+      dragLockRef.current = false;
+    }
+    if (!dragLockRef.current) {
+      pushHistory();
+      return;
+    }
+    if (dragPushedRef.current) return;
+    dragPushedRef.current = true;
+    pushHistory();
+  }
+  function beginDrag() {
+    dragLockRef.current = true;
+    dragPushedRef.current = false;
+  }
+  function endDrag() {
+    dragLockRef.current = false;
+  }
+  const onChangeRooms = next => {
+    recordChange();
+    applyRooms(next);
+  };
+  const onChangeWallHeight = next => {
+    recordChange();
+    applyWallHeight(next);
+  };
+  const onChangeFrontFace = next => {
+    recordChange();
+    applyFrontFace(next);
+  };
+  const onChangeInstallations = next => {
+    recordChange();
+    applyInstallations(next);
+  };
+  const onChangeLevelCount = next => {
+    recordChange();
+    applyLevelCount(next);
+  };
+  const canUndo = history.length > 0;
+  function undo() {
+    if (!history.length) {
+      flash("Niets om ongedaan te maken.");
+      return;
+    }
+    const snap = history[history.length - 1];
+    setHistory(h => h.slice(0, -1));
+    onRestore(snap);
+    // Een selectie of halve tekenactie kan wijzen naar iets dat een stap
+    // terug nog niet bestond.
+    dragLockRef.current = false;
+    setActiveRoomId(null);
+    setRectDraft(null);
+    setPendingRect(null);
+    setPendingRoof(null);
+    setPendingDormer(null);
+    setPendingWindow(null);
+    setSelectedConstruction(null);
+    setOpenWindowId(null);
+    if (!snap.rooms.some(r => r.id === selectedRoomId)) setSelectedRoomId(null);
+    const topLevel = Math.max((snap.levelCount || 1) - 1, 0);
+    if (activeLevel > topLevel) setActiveLevel(topLevel);
+    flash("Ongedaan gemaakt.", "ok");
+  }
+
+  // Bewust zonder dependency-lijst: de handler moet elke render de laatste
+  // stapel zien, anders maakt de sneltoets steeds dezelfde stap ongedaan.
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (!(e.metaKey || e.ctrlKey) || (e.key || "").toLowerCase() !== "z") return;
+      const t = e.target;
+      const tag = t && t.tagName;
+      // in een tekstveld hoort ⌘Z de tekst terug te draaien, niet de tekening
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t && t.isContentEditable) return;
+      e.preventDefault();
+      undo();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   const activeRoom = rooms.find(r => r.id === activeRoomId) || null;
   // a drawing tool owns the canvas: wall handles stand down while it is active
@@ -4646,6 +4774,7 @@ function FloorSketchTab({
   function onChipPointerDown(e, roomId, constructionId, chipPos) {
     e.stopPropagation();
     const pt = getSvgPoint(e);
+    beginDrag();
     setDragChip({
       roomId,
       constructionId,
@@ -4657,6 +4786,7 @@ function FloorSketchTab({
   function onWallPointerDown(e, roomId, edgeIndex) {
     e.stopPropagation();
     setSelectedRoomId(roomId);
+    beginDrag();
     setDragWall({
       roomId,
       edgeIndex,
@@ -4706,6 +4836,7 @@ function FloorSketchTab({
   function onDormerPointerDown(e, roomId, dormerId) {
     e.stopPropagation();
     setSelectedRoomId(roomId);
+    beginDrag();
     setDragDormer({
       roomId,
       dormerId,
@@ -4733,6 +4864,7 @@ function FloorSketchTab({
   function onWindowPointerDown(e, roomId, wallId, windowId) {
     e.stopPropagation();
     setSelectedRoomId(roomId);
+    beginDrag();
     setDragWindow({
       roomId,
       wallId,
@@ -4875,6 +5007,7 @@ function FloorSketchTab({
     });
   }
   function onCanvasPointerUp() {
+    endDrag(); // de hele sleep staat als één stap op de ongedaan-stapel
     if (dragChip && !dragChip.moved) {
       setSelectedConstruction({
         roomId: dragChip.roomId,
@@ -5032,6 +5165,15 @@ function FloorSketchTab({
     style: btnStyle(false),
     onClick: startFreeRoom
   }, "+ Free room"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...btnStyle(false),
+      opacity: canUndo ? 1 : 0.45,
+      cursor: canUndo ? "pointer" : "default"
+    },
+    onClick: undo,
+    disabled: !canUndo,
+    title: "Laatste wijziging ongedaan maken (⌘/Ctrl + Z)"
+  }, "↶ Ongedaan"), /*#__PURE__*/React.createElement("button", {
     style: btnStyle(false),
     onClick: undoLastPoint,
     disabled: !activeRoom || activeRoom.points.length === 0
@@ -5132,7 +5274,7 @@ function FloorSketchTab({
       flex: 1,
       position: "relative",
       minWidth: 0,
-      background: "#0D1520"
+      background: COLORS.canvasBg
     }
   }, /*#__PURE__*/React.createElement("div", {
     ref: scrollRef,
@@ -5164,7 +5306,7 @@ function FloorSketchTab({
     cx: 0,
     cy: 0,
     r: 22,
-    fill: "rgba(13,22,34,0.75)",
+    fill: COLORS.overlay,
     stroke: COLORS.panelBorder
   }), Number.isFinite(planNorthDeg) ? /*#__PURE__*/React.createElement("g", {
     transform: `rotate(${-planNorthDeg})`
@@ -5275,7 +5417,7 @@ function FloorSketchTab({
       y: y0,
       width: x1 - x0,
       height: y1 - y0,
-      fill: "rgba(245,185,66,0.08)",
+      fill: "rgba(18,120,63,0.10)",
       stroke: COLORS.roomStrokeActive,
       strokeDasharray: "6 4"
     });
@@ -5352,13 +5494,13 @@ function FloorSketchTab({
         y: top,
         width: midX - p0.x,
         height: bot - top,
-        fill: "rgba(196,138,224,0.10)"
+        fill: "rgba(122,79,182,0.10)"
       }), /*#__PURE__*/React.createElement("rect", {
         x: midX,
         y: top,
         width: p1.x - midX,
         height: bot - top,
-        fill: "rgba(196,138,224,0.17)"
+        fill: "rgba(122,79,182,0.15)"
       }), /*#__PURE__*/React.createElement("line", {
         x1: p0.x,
         y1: top,
@@ -5415,7 +5557,7 @@ function FloorSketchTab({
         onPointerDown: e => !drawing && onDormerPointerDown(e, room.id, d.id)
       }, /*#__PURE__*/React.createElement("polygon", {
         points: pl.pts.map(p => `${p.x},${p.y}`).join(" "),
-        fill: bad ? "rgba(224,100,90,0.20)" : `rgba(245,185,66,${held ? 0.34 : 0.20})`,
+        fill: bad ? "rgba(192,57,43,0.18)" : `rgba(18,120,63,${held ? 0.30 : 0.16})`,
         stroke: bad ? COLORS.danger : COLORS.accent,
         strokeWidth: held ? 2.2 : 1.4
       }), /*#__PURE__*/React.createElement("line", {
@@ -5478,7 +5620,7 @@ function FloorSketchTab({
         strokeWidth: GRAB
       }), /*#__PURE__*/React.createElement("polygon", {
         points: wp.pts.map(p => `${p.x},${p.y}`).join(" "),
-        fill: `rgba(142,216,248,${sel ? 0.6 : 0.34})`,
+        fill: `rgba(27,135,184,${sel ? 0.45 : 0.22})`,
         stroke: COLORS.windowChip,
         strokeWidth: sel ? 1.8 : 1
       }));
@@ -5520,7 +5662,7 @@ function FloorSketchTab({
         width: 52,
         height: 20,
         rx: 5,
-        fill: "#0D1622",
+        fill: COLORS.inputBg,
         stroke: COLORS.panelBorder
       }), /*#__PURE__*/React.createElement("text", {
         x: 26,
@@ -5592,7 +5734,7 @@ function FloorSketchTab({
         width: 44,
         height: 20,
         rx: 5,
-        fill: "rgba(124,194,140,0.08)",
+        fill: "rgba(46,139,87,0.10)",
         stroke: COLORS.floorChip,
         strokeDasharray: "3 3"
       }), /*#__PURE__*/React.createElement("text", {
@@ -5623,7 +5765,7 @@ function FloorSketchTab({
         width: 38,
         height: 20,
         rx: 5,
-        fill: "rgba(196,138,224,0.08)",
+        fill: "rgba(122,79,182,0.08)",
         stroke: COLORS.roofChip,
         strokeDasharray: "3 3"
       }), /*#__PURE__*/React.createElement("text", {
@@ -5681,7 +5823,7 @@ function FloorSketchTab({
       ...btnStyle(false),
       padding: "7px 12px",
       fontSize: 12.5,
-      background: "rgba(16,27,40,0.72)",
+      background: COLORS.overlay,
       backdropFilter: "blur(6px)",
       WebkitBackdropFilter: "blur(6px)",
       pointerEvents: "auto"
@@ -5690,7 +5832,7 @@ function FloorSketchTab({
     style: {
       display: "flex",
       gap: 4,
-      background: "rgba(16,27,40,0.72)",
+      background: COLORS.overlay,
       backdropFilter: "blur(6px)",
       border: `1px solid ${COLORS.panelBorder}`,
       borderRadius: 7,
@@ -5714,7 +5856,7 @@ function FloorSketchTab({
       borderRadius: 5,
       cursor: "pointer",
       background: activeLevel === i ? COLORS.accent : "transparent",
-      color: activeLevel === i ? "#151007" : COLORS.textMuted,
+      color: activeLevel === i ? COLORS.onAccent : COLORS.textMuted,
       border: `1px solid ${activeLevel === i ? COLORS.accent : COLORS.panelBorder}`,
       fontWeight: activeLevel === i ? 700 : 500
     }
@@ -5724,7 +5866,7 @@ function FloorSketchTab({
       ...btnStyle(tool === "dormer"),
       padding: "7px 12px",
       fontSize: 12.5,
-      background: tool === "dormer" ? COLORS.accent : "rgba(16,27,40,0.72)",
+      background: tool === "dormer" ? COLORS.accent : COLORS.overlay,
       backdropFilter: "blur(6px)",
       WebkitBackdropFilter: "blur(6px)",
       pointerEvents: "auto"
@@ -5735,14 +5877,14 @@ function FloorSketchTab({
       ...btnStyle(tool === "window"),
       padding: "7px 12px",
       fontSize: 12.5,
-      background: tool === "window" ? COLORS.accent : "rgba(16,27,40,0.72)",
+      background: tool === "window" ? COLORS.accent : COLORS.overlay,
       backdropFilter: "blur(6px)",
       WebkitBackdropFilter: "blur(6px)",
       pointerEvents: "auto"
     }
   }, "\u25A4 Raam"), (tool === "dormer" || tool === "window") && /*#__PURE__*/React.createElement("div", {
     style: {
-      background: "rgba(16,27,40,0.78)",
+      background: COLORS.overlay,
       backdropFilter: "blur(6px)",
       border: `1px solid ${COLORS.panelBorder}`,
       borderRadius: 7,
@@ -5753,7 +5895,7 @@ function FloorSketchTab({
     }
   }, tool === "dormer" ? "Klik op een dakvlak — in 2D of in 3D." : "Klik op een gevel — in 2D of in 3D."), notice && /*#__PURE__*/React.createElement("div", {
     style: {
-      background: notice.kind === "error" ? "rgba(224,100,90,0.16)" : "rgba(124,194,140,0.16)",
+      background: notice.kind === "error" ? "rgba(192,57,43,0.14)" : "rgba(46,139,87,0.14)",
       border: `1px solid ${notice.kind === "error" ? COLORS.danger : COLORS.good}`,
       color: notice.kind === "error" ? COLORS.danger : COLORS.good,
       backdropFilter: "blur(6px)",
@@ -5861,7 +6003,7 @@ function FloorSketchTab({
       padding: "10px 8px",
       fontSize: 12.5,
       cursor: "pointer",
-      background: sideTab === t.k ? "rgba(245,185,66,0.10)" : "transparent",
+      background: sideTab === t.k ? "rgba(18,120,63,0.12)" : "transparent",
       color: sideTab === t.k ? COLORS.accent : COLORS.textMuted,
       border: "none",
       borderBottom: `2px solid ${sideTab === t.k ? COLORS.accent : "transparent"}`,
@@ -5981,7 +6123,7 @@ function FloorSketchTab({
         justifyContent: "space-between",
         padding: "7px 9px",
         cursor: "pointer",
-        background: open ? "rgba(142,216,248,0.10)" : "transparent"
+        background: open ? "rgba(27,135,184,0.10)" : "transparent"
       }
     }, /*#__PURE__*/React.createElement("span", {
       style: {
@@ -6353,8 +6495,8 @@ function FloorSketchTab({
       borderRadius: 6,
       marginBottom: 4,
       cursor: "pointer",
-      background: selectedRoomId === room.id ? "rgba(245,185,66,0.08)" : "transparent",
-      border: `1px solid ${selectedRoomId === room.id ? "rgba(245,185,66,0.35)" : "transparent"}`
+      background: selectedRoomId === room.id ? "rgba(18,120,63,0.10)" : "transparent",
+      border: `1px solid ${selectedRoomId === room.id ? "rgba(18,120,63,0.32)" : "transparent"}`
     }
   }, /*#__PURE__*/React.createElement("input", {
     value: room.name,
@@ -6524,7 +6666,7 @@ function EPAApp() {
   }, saveError && /*#__PURE__*/React.createElement("div", {
     style: {
       background: COLORS.danger,
-      color: "#1A0D0B",
+      color: COLORS.onAccent,
       fontSize: 13,
       fontWeight: 700,
       padding: "8px 14px",
@@ -6564,6 +6706,8 @@ function EPAApp() {
     onChangeLevelCount: levelCount => updateActive({
       levelCount
     }),
+    // ongedaan maken zet meerdere velden tegelijk terug, dus in één patch
+    onRestore: snapshot => updateActive(snapshot),
     onFinish: () => {
       updateActive({
         stage: "sketch"
