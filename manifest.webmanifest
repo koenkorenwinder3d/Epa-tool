@@ -1,0 +1,16 @@
+{
+  "name": "EPA Schets",
+  "short_name": "EPA",
+  "description": "EPA-W opnametool: adres, plattegrond en installaties",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0B121C",
+  "theme_color": "#0B121C",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
