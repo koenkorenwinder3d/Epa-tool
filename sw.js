@@ -7,7 +7,7 @@
  * Bij elke wijziging aan index.html moet CACHE omhoog, anders blijft een
  * geinstalleerde iPad op de oude versie hangen.
  */
-const CACHE = "epa-v2";
+const CACHE = "epa-v3";
 
 const PRECACHE = [
   "./",
