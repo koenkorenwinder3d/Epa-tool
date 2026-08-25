@@ -2540,6 +2540,7 @@ function num(v, d = 2) {
 function buildVabiXml(project) {
   const a = project.address || {};
   const rooms = (project.rooms || []).filter(r => r.closed);
+  const zones = projectZones(project);
   const planNorthDeg = planNorthFrom(project.frontFace, rooms, a.orientationDeg);
   const frontDeg = Number.isFinite(a.orientationDeg) ? a.orientationDeg : 0;
   // orientation index relative to the voorgevel, as Vabi stores it
@@ -2573,6 +2574,7 @@ function buildVabiXml(project) {
       const naam = `${side.code}.${verdieping}.${nextIdx(side.code, verdieping)} | Gevel | ${side.naam}`;
       hoofdvlakken.push({
         kind: "gevel",
+        zoneId: resolveZoneId(zones, w.zoneId),
         naam,
         constructie: C.gevel,
         locatie: side.locatie,
@@ -2601,6 +2603,7 @@ function buildVabiXml(project) {
       const naam = `${side.code}.${verdieping}.${nextIdx(side.code, verdieping)} | Gevel | ${side.naam}`;
       hoofdvlakken.push({
         kind: "gevel",
+        zoneId: resolveZoneId(zones, g.zoneId),
         naam,
         constructie: C.gevel,
         locatie: side.locatie,
@@ -2618,6 +2621,7 @@ function buildVabiXml(project) {
       const naam = `${side.dak}.${verdieping}.${nextIdx(side.dak, verdieping)} | Dak`;
       hoofdvlakken.push({
         kind: "dak",
+        zoneId: resolveZoneId(zones, d.zoneId),
         naam,
         constructie: C.dak,
         locatie: VABI_LOCATIE.dak,
@@ -2639,6 +2643,7 @@ function buildVabiXml(project) {
       const side = VABI_SIDE_BY_INDEX[idx] || VABI_SIDE_BY_INDEX[0];
       hoofdvlakken.push({
         kind: "gevel",
+        zoneId: resolveZoneId(zones, d.zoneId),
         naam: `${side.code}.${verdieping}.${nextIdx(side.code, verdieping)} | Gevel | ${side.naam}`,
         constructie: C.gevel,
         locatie: side.locatie,
@@ -2653,6 +2658,7 @@ function buildVabiXml(project) {
       });
       hoofdvlakken.push({
         kind: "dak",
+        zoneId: resolveZoneId(zones, d.zoneId),
         naam: `${side.dak}.${verdieping}.${nextIdx(side.dak, verdieping)} | Dak`,
         constructie: C.dak,
         locatie: VABI_LOCATIE.dak,
@@ -2667,6 +2673,7 @@ function buildVabiXml(project) {
     cs.filter(c => c.kind === "floor").forEach(f => {
       hoofdvlakken.push({
         kind: "vloer",
+        zoneId: resolveZoneId(zones, f.zoneId),
         naam: `V.${verdieping}.${nextIdx("V", verdieping)} | Vloer`,
         constructie: C.vloer,
         locatie: VABI_LOCATIE.vloer,
@@ -2680,7 +2687,8 @@ function buildVabiXml(project) {
       });
     });
   });
-  const installatieGuid = guid();
+  // één installatie per rekenzone: Vabi hangt de installatie aan de zone
+  const installatieGuids = zones.map(() => guid());
   const naamObject = `${a.street || ""} ${a.houseNumber || ""}${a.ext || ""}  | ${(a.postcode || "").replace(/\s/g, "")} ${a.city || ""}`;
   L.push("<Project>");
   t("Guid", guid());
@@ -2758,99 +2766,105 @@ function buildVabiXml(project) {
   L.push("</RegistratiegegevensInvoer>");
   t("Bron", -1);
   L.push("</ObjectAlgemeen>");
+  // Eén <Rekenzone> per rekenzone, elk met alleen de eigen hoofdvlakken.
   L.push("<Rekenzones>");
   t("Guid", guid());
-  L.push('<Rekenzone Index="0">');
-  t("Guid", guid());
-  t("Naam", "Algemene rekenzone");
-  L.push("<Algemeen>");
-  t("Guid", guid());
-  t("Bouwjaar", a.constructionYear || 0);
-  t("Renovatiejaar", 0);
-  t("TypeBouwwijzeVloeren", 1);
-  t("TypeBouwwijzeWanden", 1);
-  t("Gebruiksoppervlakte", 0);
-  L.push("<Verdiepingen>");
-  t("Guid", guid());
-  // one Verdieping per storey; a floor without its own vloer construction
-  // still reports the footprint of its rooms as gebruiksoppervlakte
-  for (let lvl = 0; lvl < (project.levelCount || 1); lvl++) {
-    const lvlRooms = rooms.filter(r => roomLevel(r) === lvl);
-    const opp = lvlRooms.reduce((s, r) => s + (r.rect ? r.rect.widthM * r.rect.lengthM : shoelaceAreaPx(r.points) / (PPM * PPM)), 0);
-    L.push(`<Verdieping Index="${lvl}">`);
+  zones.forEach((zone, zi) => {
+    const zoneVlakken = hoofdvlakken.filter(h => h.zoneId === zone.id);
+    L.push(`<Rekenzone Index="${zi}">`);
     t("Guid", guid());
-    t("Gebruiksoppervlakte", opp.toFixed(3));
-    L.push("</Verdieping>");
-  }
-  L.push("</Verdiepingen></Algemeen>");
-  L.push("<Geometrie>");
-  t("Guid", guid());
-  hoofdvlakken.forEach((h, i) => {
-    L.push(`<Hoofdvlak Index="${i + 1}">`);
+    t("Naam", zone.name);
+    L.push("<Algemeen>");
     t("Guid", guid());
-    t("Naam", h.naam);
-    t("Constructie", h.constructie);
-    t("NaamConstructie", h.naam);
-    t("AutoNaam", 0);
-    if (h.kind !== "gevel") t("BouwdeelIsInactief", 0);
-    t("Locatie", h.locatie);
-    t("Oppervlakte", h.opp.toFixed(2));
-    // the source file really does spell this differently per surface type
-    t(h.kind === "gevel" ? "BruttoOppervlakte" : "BrutoOppervlakte", h.bruto.toFixed(2));
-    t("NettoOppervlakte", h.netto.toFixed(2));
-    t("Breedte", Number.isFinite(h.breedte) ? h.breedte.toFixed(2) : "");
-    t("HoogteOfLengte", Number.isFinite(h.hoogte) ? h.hoogte.toFixed(2) : "");
-    t("GrenstAan", h.kind === "vloer" ? 3 : 0);
-    t("Orientatie", h.orientatie);
-    t("Hellingshoek", h.helling);
-    if (h.kind === "vloer") {
-      t("Perimeter", h.perimeter.toFixed(3));
-      t("AutoPerimeter", 0);
-      t("BodemisolatieKruipruimte", -1);
-      t("VloerOpBovenMaaiveld", 1);
-      t("DiepteVloerOnderMaaiveld", "0.00");
-    } else {
-      L.push("<Perimeter/><AutoPerimeter/><BodemisolatieKruipruimte/><VloerOpBovenMaaiveld/><DiepteVloerOnderMaaiveld/>");
-    }
-    L.push("<Code/>");
-    t("Bron", -1);
-    L.push("<Opmerkingen/>");
-    L.push("<DeelvlakList>");
+    t("Bouwjaar", a.constructionYear || 0);
+    t("Renovatiejaar", 0);
+    t("TypeBouwwijzeVloeren", 1);
+    t("TypeBouwwijzeWanden", 1);
+    // de adviseur vult de gebruiksoppervlakte van een rekenzone zelf in
+    t("Gebruiksoppervlakte", Number.isFinite(zone.areaM2) ? zone.areaM2.toFixed(3) : 0);
+    L.push("<Verdiepingen>");
     t("Guid", guid());
-    h.deelvlakken.forEach((d, j) => {
-      const dn = `${d.code} | ${d.soort} | ${h.naam}`;
-      L.push(`<Deelvlak Index="${j + 1}">`);
-      t("NaamHoofdvlak", h.naam);
+    // one Verdieping per storey; a floor without its own vloer construction
+    // still reports the footprint of its rooms as gebruiksoppervlakte
+    for (let lvl = 0; lvl < (project.levelCount || 1); lvl++) {
+      const lvlRooms = rooms.filter(r => roomLevel(r) === lvl && roomZoneId(zones, r) === zone.id);
+      const opp = lvlRooms.reduce((s, r) => s + (r.rect ? r.rect.widthM * r.rect.lengthM : shoelaceAreaPx(r.points) / (PPM * PPM)), 0);
+      L.push(`<Verdieping Index="${lvl}">`);
       t("Guid", guid());
-      t("Naam", dn);
+      t("Gebruiksoppervlakte", opp.toFixed(3));
+      L.push("</Verdieping>");
+    }
+    L.push("</Verdiepingen></Algemeen>");
+    L.push("<Geometrie>");
+    t("Guid", guid());
+    zoneVlakken.forEach((h, i) => {
+      L.push(`<Hoofdvlak Index="${i + 1}">`);
+      t("Guid", guid());
+      t("Naam", h.naam);
+      t("Constructie", h.constructie);
+      t("NaamConstructie", h.naam);
       t("AutoNaam", 0);
-      t("Constructie", d.constructie);
-      t("NaamConstructie", dn);
-      t("Oppervlakte", d.opp.toFixed(2));
-      t("RelevanteOppervlakte", d.opp.toFixed(2));
-      t("Breedte", d.breedte.toFixed(5));
-      t("HoogteOfLengte", d.hoogte.toFixed(5));
-      t("Orientatie", d.orientatie);
-      t("Hellingshoek", d.helling);
-      t("Zonwering", 0);
-      L.push("<ZonweringGglAlt></ZonweringGglAlt><ZonweringGglDif></ZonweringGglDif><ZonweringBediening/><ZonweringKleur/>");
-      t("InvoerBeschaduwing", 0);
-      t("InvoerOverstek", -1);
-      t("ConstanteBelemmering", -1);
-      t("Zijbelemmering", -1);
-      t("RelatieveBreedteZijbelemmering", -1);
-      t("Overstek", "false");
-      L.push("<OverstekHoogte></OverstekHoogte><OverstekAfstand></OverstekAfstand>");
-      L.push("</Deelvlak>");
+      if (h.kind !== "gevel") t("BouwdeelIsInactief", 0);
+      t("Locatie", h.locatie);
+      t("Oppervlakte", h.opp.toFixed(2));
+      // the source file really does spell this differently per surface type
+      t(h.kind === "gevel" ? "BruttoOppervlakte" : "BrutoOppervlakte", h.bruto.toFixed(2));
+      t("NettoOppervlakte", h.netto.toFixed(2));
+      t("Breedte", Number.isFinite(h.breedte) ? h.breedte.toFixed(2) : "");
+      t("HoogteOfLengte", Number.isFinite(h.hoogte) ? h.hoogte.toFixed(2) : "");
+      t("GrenstAan", h.kind === "vloer" ? 3 : 0);
+      t("Orientatie", h.orientatie);
+      t("Hellingshoek", h.helling);
+      if (h.kind === "vloer") {
+        t("Perimeter", h.perimeter.toFixed(3));
+        t("AutoPerimeter", 0);
+        t("BodemisolatieKruipruimte", -1);
+        t("VloerOpBovenMaaiveld", 1);
+        t("DiepteVloerOnderMaaiveld", "0.00");
+      } else {
+        L.push("<Perimeter/><AutoPerimeter/><BodemisolatieKruipruimte/><VloerOpBovenMaaiveld/><DiepteVloerOnderMaaiveld/>");
+      }
+      L.push("<Code/>");
+      t("Bron", -1);
+      L.push("<Opmerkingen/>");
+      L.push("<DeelvlakList>");
+      t("Guid", guid());
+      h.deelvlakken.forEach((d, j) => {
+        const dn = `${d.code} | ${d.soort} | ${h.naam}`;
+        L.push(`<Deelvlak Index="${j + 1}">`);
+        t("NaamHoofdvlak", h.naam);
+        t("Guid", guid());
+        t("Naam", dn);
+        t("AutoNaam", 0);
+        t("Constructie", d.constructie);
+        t("NaamConstructie", dn);
+        t("Oppervlakte", d.opp.toFixed(2));
+        t("RelevanteOppervlakte", d.opp.toFixed(2));
+        t("Breedte", d.breedte.toFixed(5));
+        t("HoogteOfLengte", d.hoogte.toFixed(5));
+        t("Orientatie", d.orientatie);
+        t("Hellingshoek", d.helling);
+        t("Zonwering", 0);
+        L.push("<ZonweringGglAlt></ZonweringGglAlt><ZonweringGglDif></ZonweringGglDif><ZonweringBediening/><ZonweringKleur/>");
+        t("InvoerBeschaduwing", 0);
+        t("InvoerOverstek", -1);
+        t("ConstanteBelemmering", -1);
+        t("Zijbelemmering", -1);
+        t("RelatieveBreedteZijbelemmering", -1);
+        t("Overstek", "false");
+        L.push("<OverstekHoogte></OverstekHoogte><OverstekAfstand></OverstekAfstand>");
+        L.push("</Deelvlak>");
+      });
+      L.push("</DeelvlakList>");
+      L.push("</Hoofdvlak>");
     });
-    L.push("</DeelvlakList>");
-    L.push("</Hoofdvlak>");
+    L.push("</Geometrie>");
+    t("OwnInstallatieId", installatieGuids[zi]);
+    t("OrientatieVoorgevel", orientationName(a.orientationDeg));
+    ["InstallatieRefRekenzoneId", "KoelingOpwekkingRefRekenzoneId", "KoelingAfgifteRefRekenzoneId", "KoelingDistributieRefRekenzoneId", "VerwarmingRefRekenzoneId", "VerwarmingAfgifteRefRekenzoneId", "VerwarmingDistributieRefRekenzoneId", "VentilatieRefRekenzoneId", "TapwaterRefRekenzoneId", "VochtRegelingRefRekenzoneId"].forEach(k => t(k, NIL_GUID));
+    L.push("</Rekenzone>");
   });
-  L.push("</Geometrie>");
-  t("OwnInstallatieId", installatieGuid);
-  t("OrientatieVoorgevel", orientationName(a.orientationDeg));
-  ["InstallatieRefRekenzoneId", "KoelingOpwekkingRefRekenzoneId", "KoelingAfgifteRefRekenzoneId", "KoelingDistributieRefRekenzoneId", "VerwarmingRefRekenzoneId", "VerwarmingAfgifteRefRekenzoneId", "VerwarmingDistributieRefRekenzoneId", "VentilatieRefRekenzoneId", "TapwaterRefRekenzoneId", "VochtRegelingRefRekenzoneId"].forEach(k => t(k, NIL_GUID));
-  L.push("</Rekenzone></Rekenzones></Object></Objecten>");
+  L.push("</Rekenzones></Object></Objecten>");
 
   // Vabi's own export of a project WITHOUT installations carries only Naam and
   // Opmerkingen here, so the element names for the ventilation fields are not
@@ -2859,27 +2873,32 @@ function buildVabiXml(project) {
   // out as readable text in Opmerkingen, and the real elements stay behind the
   // switch below until a Vabi export WITH ventilation confirms their names.
   const VENT_ELEMENTS_KNOWN = false;
-  L.push("<Installaties>");
-  t("Guid", guid());
-  L.push('<Installatie Index="1">');
-  t("Guid", installatieGuid);
-  t("Naam", "Algemene rekenzone");
   const insts = project.installations || [];
   const notes = insts.map(i => {
     const v = ventSummary(i.sections && i.sections.ventilatie);
     return v ? `${i.name} | Ventilatie: ${v}` : i.name;
   });
-  t("Opmerkingen", notes.join("\n"));
-  if (VENT_ELEMENTS_KNOWN) {
-    insts.forEach(i => {
-      const v = i.sections && i.sections.ventilatie || {};
-      if (!v.system) return;
-      t("VentilatieSysteemType", v.systeem);
-      t("Ventilatiesysteem", v.system);
-      t("VentilatieSubsysteem", v.subsysteem);
-    });
-  }
-  L.push("</Installatie></Installaties>");
+  L.push("<Installaties>");
+  t("Guid", guid());
+  // Elke rekenzone heeft zijn eigen installatie nodig, ook al voert de app de
+  // installaties nog niet per zone in: de notities gaan mee met de eerste.
+  zones.forEach((zone, zi) => {
+    L.push(`<Installatie Index="${zi + 1}">`);
+    t("Guid", installatieGuids[zi]);
+    t("Naam", zone.name);
+    t("Opmerkingen", zi === 0 ? notes.join("\n") : "");
+    if (VENT_ELEMENTS_KNOWN && zi === 0) {
+      insts.forEach(i => {
+        const v = i.sections && i.sections.ventilatie || {};
+        if (!v.system) return;
+        t("VentilatieSysteemType", v.systeem);
+        t("Ventilatiesysteem", v.system);
+        t("VentilatieSubsysteem", v.subsysteem);
+      });
+    }
+    L.push("</Installatie>");
+  });
+  L.push("</Installaties>");
 
   // Material properties are placeholders: "onbekend" everywhere, since the
   // EPA choices behind them have not been specified yet.
@@ -3597,6 +3616,66 @@ function duplicateRoomUp(room, newLevelIndex, name) {
   };
 }
 
+// =====================================================================
+// rekenzones
+//
+// Elk project heeft er minstens één: de algemene rekenzone. Een constructie
+// zonder zoneId hoort daarbij, zodat alles wat je tekent er vanzelf in valt
+// en projecten van vóór deze versie blijven kloppen. Pas als er een tweede
+// zone is toegevoegd verschijnt de keuze bij een constructie.
+// =====================================================================
+const GENERAL_ZONE_ID = "zone-algemeen";
+const CONSTRUCTION_KIND_LABELS = {
+  wall: "Gevel",
+  gable: "Topgevel",
+  roof: "Dakvlak",
+  floor: "Vloer",
+  dormer: "Dakkapel"
+};
+function defaultZones() {
+  return [{
+    id: GENERAL_ZONE_ID,
+    name: "Algemene rekenzone",
+    areaM2: null
+  }];
+}
+function projectZones(project) {
+  const zs = project && project.zones;
+  return Array.isArray(zs) && zs.length ? zs : defaultZones();
+}
+// Een constructie kan naar een zone wijzen die intussen verwijderd is. Die
+// valt terug op de algemene zone in plaats van uit de export te vallen.
+function resolveZoneId(zones, zoneId) {
+  return zones.some(z => z.id === zoneId) ? zoneId : zones[0].id;
+}
+function zoneNameOf(zones, zoneId) {
+  const z = zones.find(x => x.id === resolveZoneId(zones, zoneId));
+  return z ? z.name : zones[0].name;
+}
+// Netto oppervlak van één constructie, zoals de zonelijst het toont.
+function constructionAreaM2(room, c) {
+  if (c.kind === "wall") return Math.max(c.lengthM * c.heightM - windowsAreaM2(c), 0);
+  if (c.kind === "dormer") {
+    const g = dormerGeometry(room, c);
+    return g ? g.frontM2 + g.cheeksM2 + g.roofM2 : 0;
+  }
+  return c.areaM2 || 0;
+}
+// Welke zone het vloeroppervlak van een ruimte telt: de vloer beslist, en
+// zonder vloer de zone waar de meeste constructies van die ruimte in zitten.
+function roomZoneId(zones, room) {
+  const cs = room.constructions || [];
+  const floor = cs.find(c => c.kind === "floor");
+  if (floor) return resolveZoneId(zones, floor.zoneId);
+  const tally = {};
+  cs.forEach(c => {
+    const id = resolveZoneId(zones, c.zoneId);
+    tally[id] = (tally[id] || 0) + 1;
+  });
+  const best = Object.keys(tally).sort((x, y) => tally[y] - tally[x])[0];
+  return best || zones[0].id;
+}
+
 // Display name in Vabi's grammar: VG.1.1 = voorgevel, verdieping 1, first of
 // its kind. Falls back to the plain label until a voorgevel has been tagged.
 function computeWallNames(project, rooms, planNorthDeg) {
@@ -4017,6 +4096,7 @@ function FloorSketchTab({
   onChangeFrontFace: applyFrontFace,
   onChangeInstallations: applyInstallations,
   onChangeLevelCount: applyLevelCount,
+  onChangeZones: applyZones,
   onRestore,
   onFinish,
   onBack
@@ -4054,6 +4134,8 @@ function FloorSketchTab({
   const [dragDormer, setDragDormer] = useState(null); // {roomId, dormerId, moved}
   const [dragWindow, setDragWindow] = useState(null); // {roomId, wallId, windowId, moved}
   const [hoverWall, setHoverWall] = useState(null); // {roomId, edgeIndex}
+  const [zonesOpen, setZonesOpen] = useState(false); // rekenzone-paneel over de viewport
+  const [openZoneId, setOpenZoneId] = useState(null); // uitgeklapte zone in dat paneel
   const [zoom, setZoom] = useState(1);
   const svgRef = useRef(null);
   const scrollRef = useRef(null);
@@ -4075,7 +4157,8 @@ function FloorSketchTab({
       wallHeight: project.wallHeight,
       frontFace: project.frontFace,
       installations: project.installations,
-      levelCount: project.levelCount
+      levelCount: project.levelCount,
+      zones: project.zones
     };
   }
   function pushHistory() {
@@ -4129,6 +4212,10 @@ function FloorSketchTab({
     recordChange();
     applyLevelCount(next);
   };
+  const onChangeZones = next => {
+    recordChange();
+    applyZones(next);
+  };
   const canUndo = history.length > 0;
   function undo() {
     if (!history.length) {
@@ -4150,6 +4237,7 @@ function FloorSketchTab({
     setSelectedConstruction(null);
     setOpenWindowId(null);
     if (!snap.rooms.some(r => r.id === selectedRoomId)) setSelectedRoomId(null);
+    setOpenZoneId(null);
     const topLevel = Math.max((snap.levelCount || 1) - 1, 0);
     if (activeLevel > topLevel) setActiveLevel(topLevel);
     flash("Ongedaan gemaakt.", "ok");
@@ -4193,6 +4281,63 @@ function FloorSketchTab({
   const ghostRooms = rooms.filter(r => roomLevel(r) !== activeLevel && r.closed);
   const wallNames = computeWallNames(project, rooms, planNorthDeg);
   const nameOf = c => wallNames[c.id] || c.label;
+
+  // ---- rekenzones -----------------------------------------------------
+  const zones = projectZones(project);
+  const multiZone = zones.length > 1;
+  // Alle constructies met hun ruimte erbij, in de volgorde van de tekening.
+  // De zonelijst en de tellingen lezen hier allemaal uit.
+  const zonedConstructions = rooms.filter(r => r.closed).flatMap(room => (room.constructions || []).map(c => ({
+    room,
+    c,
+    zoneId: resolveZoneId(zones, c.zoneId)
+  })));
+  function constructionsInZone(zoneId) {
+    return zonedConstructions.filter(z => z.zoneId === zoneId);
+  }
+  function addZone() {
+    const zone = {
+      // niet de id-teller: die begint na een herstart opnieuw bij het hoogste
+      // nummer in de tekening, en een zone-id moet daar los van uniek blijven
+      id: `zone-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`,
+      name: `Rekenzone ${zones.length + 1}`,
+      areaM2: null
+    };
+    onChangeZones([...zones, zone]);
+    setZonesOpen(true);
+    setOpenZoneId(zone.id);
+    flash(`${zone.name} toegevoegd — kies per constructie de zone.`, "ok");
+  }
+  function updateZone(zoneId, patch) {
+    onChangeZones(zones.map(z => z.id === zoneId ? {
+      ...z,
+      ...patch
+    } : z));
+  }
+  // De algemene rekenzone blijft staan; verwijder je een tweede zone, dan
+  // vallen haar constructies terug op de algemene zone.
+  function deleteZone(zoneId) {
+    if (zones.length < 2 || zoneId === zones[0].id) return;
+    onChangeZones(zones.filter(z => z.id !== zoneId));
+    onChangeRooms(rooms.map(r => ({
+      ...r,
+      constructions: (r.constructions || []).map(c => c.zoneId === zoneId ? {
+        ...c,
+        zoneId: undefined
+      } : c)
+    })));
+    if (openZoneId === zoneId) setOpenZoneId(null);
+  }
+  function setConstructionZone(roomId, constructionId, zoneId) {
+    onChangeRooms(rooms.map(r => r.id !== roomId ? r : {
+      ...r,
+      constructions: (r.constructions || []).map(c => c.id !== constructionId ? c : {
+        ...c,
+        // de algemene zone is de standaard: die slaan we niet op
+        zoneId: zoneId === zones[0].id ? undefined : zoneId
+      })
+    }));
+  }
   function addLevel() {
     const top = levelCount - 1;
     const srcRooms = rooms.filter(r => roomLevel(r) === top && r.closed && r.rect);
@@ -4368,19 +4513,14 @@ function FloorSketchTab({
     setSelectedRoomId(room.id);
     setTool(null);
   }
+  // Een vrije ruimte sluit door op het eerste punt te klikken; een punt terug
+  // gaat met ↶ Ongedaan. Losse knoppen daarvoor staan niet meer in de balk.
   function closeActiveRoom() {
     onChangeRooms(rooms.map(r => r.id === activeRoomId ? {
       ...r,
       closed: true
     } : r));
     setActiveRoomId(null);
-  }
-  function undoLastPoint() {
-    if (!activeRoom || activeRoom.points.length === 0) return;
-    onChangeRooms(rooms.map(r => r.id === activeRoom.id ? {
-      ...r,
-      points: r.points.slice(0, -1)
-    } : r));
   }
   function applyLastLength() {
     if (!activeRoom || activeRoom.points.length < 2) return;
@@ -5127,6 +5267,221 @@ function FloorSketchTab({
   const selectedRectRoom = rooms.find(r => r.id === selectedRoomId && r.rect) || null;
   const selectedConstructionRoom = selectedConstruction ? rooms.find(r => r.id === selectedConstruction.roomId) || null : null;
   const selectedConstructionObj = selectedConstructionRoom ? selectedConstructionRoom.constructions.find(c => c.id === selectedConstruction.constructionId) : null;
+
+  // ---- rekenzone-paneel over de viewport ------------------------------
+  // Dicht: alleen de knop. Open: de zones met hun (zelf ingevulde) m².
+  // Eén zone aangeklikt: de constructies die eronder vallen.
+  const openZone = openZoneId ? zones.find(z => z.id === openZoneId) : null;
+  const zoneRow = zone => {
+    const inZone = constructionsInZone(zone.id);
+    const opp = inZone.reduce((s, z) => s + constructionAreaM2(z.room, z.c), 0);
+    return /*#__PURE__*/React.createElement("div", {
+      key: zone.id,
+      style: {
+        borderTop: `1px solid ${COLORS.panelBorder}`,
+        padding: "8px 10px"
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setOpenZoneId(zone.id),
+      title: "Toon de constructies in deze rekenzone",
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 8,
+        width: "100%",
+        background: "transparent",
+        border: "none",
+        padding: 0,
+        cursor: "pointer",
+        color: COLORS.text,
+        fontFamily: sansFont,
+        fontSize: 13,
+        fontWeight: 600,
+        textAlign: "left"
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "block"
+      }
+    }, zone.name), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "block",
+        fontSize: 11,
+        color: COLORS.textMuted,
+        fontWeight: 500,
+        marginTop: 2
+      }
+    }, inZone.length, inZone.length === 1 ? " constructie · " : " constructies · ", fmt(opp), " m²")), /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: COLORS.textMuted,
+        fontWeight: 500
+      }
+    }, "›")), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        marginTop: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: COLORS.textMuted,
+        minWidth: 96
+      }
+    }, "Gebruiksopp."), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }, /*#__PURE__*/React.createElement(NumInput, {
+      value: Number.isFinite(zone.areaM2) ? zone.areaM2 : null,
+      unit: "m²",
+      onCommit: v => updateZone(zone.id, {
+        areaM2: Number.isFinite(v) ? v : null
+      })
+    })), zone.id !== zones[0].id && /*#__PURE__*/React.createElement("button", {
+      onClick: () => deleteZone(zone.id),
+      title: "Rekenzone verwijderen — haar constructies gaan terug naar de algemene zone",
+      style: {
+        ...btnStyle(false, true),
+        padding: "4px 8px",
+        fontSize: 11.5
+      }
+    }, "✕")));
+  };
+  const zonePanel = zonesOpen && /*#__PURE__*/React.createElement("div", {
+    style: {
+      pointerEvents: "auto",
+      width: 320,
+      maxHeight: 340,
+      overflowY: "auto",
+      background: COLORS.overlay,
+      backdropFilter: "blur(6px)",
+      WebkitBackdropFilter: "blur(6px)",
+      border: `1px solid ${COLORS.panelBorder}`,
+      borderRadius: 9,
+      boxShadow: "0 6px 20px rgba(19,33,26,0.12)"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 8,
+      padding: "8px 10px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+      color: COLORS.textMuted,
+      fontWeight: 600
+    }
+  }, openZone ? openZone.name : "Rekenzones"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, openZone && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setOpenZoneId(null),
+    style: {
+      ...btnStyle(false),
+      padding: "3px 8px",
+      fontSize: 11.5
+    }
+  }, "← Zones"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setZonesOpen(false);
+      setOpenZoneId(null);
+    },
+    style: {
+      ...btnStyle(false),
+      padding: "3px 8px",
+      fontSize: 11.5
+    }
+  }, "✕"))), openZone ? (() => {
+    const inZone = constructionsInZone(openZone.id);
+    if (!inZone.length) return /*#__PURE__*/React.createElement("div", {
+      style: {
+        padding: "0 10px 10px",
+        fontSize: 11.5,
+        color: COLORS.textMuted,
+        lineHeight: 1.5
+      }
+    }, "Nog geen constructies in deze rekenzone. Selecteer een constructie en kies de zone in het rechterpaneel.");
+    return inZone.map(({
+      room,
+      c
+    }) => /*#__PURE__*/React.createElement("button", {
+      key: c.id,
+      onClick: () => {
+        setActiveLevel(roomLevel(room));
+        setSelectedRoomId(room.id);
+        setSelectedConstruction({
+          roomId: room.id,
+          constructionId: c.id
+        });
+        setSideTab("constructies");
+      },
+      style: {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        gap: 8,
+        width: "100%",
+        textAlign: "left",
+        background: "transparent",
+        border: "none",
+        borderTop: `1px solid ${COLORS.panelBorder}`,
+        padding: "7px 10px",
+        cursor: "pointer",
+        fontFamily: sansFont
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "block",
+        fontSize: 12.5,
+        color: COLORS.text,
+        fontWeight: 600
+      }
+    }, nameOf(c)), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "block",
+        fontSize: 11,
+        color: COLORS.textMuted
+      }
+    }, CONSTRUCTION_KIND_LABELS[c.kind] || c.kind, " · ", room.name, roomLevel(room) > 0 ? ` · verdieping ${roomLevel(room)}` : "")), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        fontFamily: monoFont,
+        color: COLORS.textMuted,
+        whiteSpace: "nowrap"
+      }
+    }, fmt(constructionAreaM2(room, c)), " m²")));
+  })() : /*#__PURE__*/React.createElement(React.Fragment, null, zones.map(zoneRow), /*#__PURE__*/React.createElement("div", {
+    style: {
+      borderTop: `1px solid ${COLORS.panelBorder}`,
+      padding: "8px 10px"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: addZone,
+    style: {
+      ...btnStyle(false),
+      width: "100%",
+      padding: "6px 10px",
+      fontSize: 12
+    }
+  }, "+ Rekenzone"))));
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
@@ -5175,13 +5530,9 @@ function FloorSketchTab({
     title: "Laatste wijziging ongedaan maken (⌘/Ctrl + Z)"
   }, "↶ Ongedaan"), /*#__PURE__*/React.createElement("button", {
     style: btnStyle(false),
-    onClick: undoLastPoint,
-    disabled: !activeRoom || activeRoom.points.length === 0
-  }, "Undo point"), /*#__PURE__*/React.createElement("button", {
-    style: btnStyle(false),
-    onClick: closeActiveRoom,
-    disabled: !activeRoom || activeRoom.points.length < 3
-  }, "Close room"), /*#__PURE__*/React.createElement("label", {
+    onClick: addZone,
+    title: "Een extra rekenzone toevoegen — constructies wijs je daarna per stuk toe"
+  }, "+ Rekenzone"), /*#__PURE__*/React.createElement("label", {
     style: {
       display: "flex",
       alignItems: "center",
@@ -5882,7 +6233,22 @@ function FloorSketchTab({
       WebkitBackdropFilter: "blur(6px)",
       pointerEvents: "auto"
     }
-  }, "\u25A4 Raam"), (tool === "dormer" || tool === "window") && /*#__PURE__*/React.createElement("div", {
+  }, "\u25A4 Raam"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setZonesOpen(o => !o);
+      setOpenZoneId(null);
+    },
+    title: "Rekenzones en hun constructies",
+    style: {
+      ...btnStyle(zonesOpen),
+      padding: "7px 12px",
+      fontSize: 12.5,
+      background: zonesOpen ? COLORS.accent : COLORS.overlay,
+      backdropFilter: "blur(6px)",
+      WebkitBackdropFilter: "blur(6px)",
+      pointerEvents: "auto"
+    }
+  }, "\u25A6 Rekenzones", multiZone ? ` (${zones.length})` : ""), zonePanel, (tool === "dormer" || tool === "window") && /*#__PURE__*/React.createElement("div", {
     style: {
       background: COLORS.overlay,
       backdropFilter: "blur(6px)",
@@ -6046,6 +6412,27 @@ function FloorSketchTab({
         marginBottom: 6
       }
     }, "Ori\xEBntatie onbekend \u2014 markeer eerst een voorgevel.");
+  })(), (() => {
+    // Bij \u00e9\u00e9n rekenzone valt er niets te kiezen: dan staat er alleen waar de
+    // constructie in valt. Zodra er een tweede is, wordt het een keuze.
+    const zoneId = resolveZoneId(zones, selectedConstructionObj.zoneId);
+    if (!multiZone) return /*#__PURE__*/React.createElement(Row, {
+      label: "Rekenzone",
+      value: zoneNameOf(zones, zoneId)
+    });
+    return /*#__PURE__*/React.createElement(Field, {
+      label: "Rekenzone"
+    }, /*#__PURE__*/React.createElement("select", {
+      value: zoneId,
+      onChange: e => setConstructionZone(selectedConstruction.roomId, selectedConstructionObj.id, e.target.value),
+      style: {
+        ...inputBase,
+        padding: "7px 8px"
+      }
+    }, zones.map(z => /*#__PURE__*/React.createElement("option", {
+      key: z.id,
+      value: z.id
+    }, z.name))));
   })(), selectedConstructionObj.kind === "wall" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Field, {
     label: `Lengte — ${(selectedConstructionObj.edgeIndex ?? 0) % 2 === 0 ? "breedte A (X)" : "lengte B (Y)"}`
   }, /*#__PURE__*/React.createElement(NumInput, {
@@ -6421,7 +6808,7 @@ function FloorSketchTab({
       color: COLORS.textMuted,
       marginTop: 6
     }
-  }, "Focused field \u2014 laser auto-fill lands here.")), selectedRectRoom && /*#__PURE__*/React.createElement("div", {
+  }, "Focused field \u2014 laser auto-fill lands here. Klik op het eerste punt om de ruimte te sluiten.")), selectedRectRoom && /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "14px 16px",
       borderBottom: `1px solid ${COLORS.panelBorder}`
@@ -6614,7 +7001,9 @@ function newProject() {
     frontFace: null,
     // {roomId, edgeIndex} — tagged on the first rectangle
     installations: [],
-    levelCount: 1 // verdiepingen; rooms carry levelIndex, 0 = begane grond
+    levelCount: 1,
+    // verdiepingen; rooms carry levelIndex, 0 = begane grond
+    zones: defaultZones() // rekenzones; constructies zonder zoneId horen bij de eerste
   };
 }
 function EPAApp() {
@@ -6705,6 +7094,9 @@ function EPAApp() {
     }),
     onChangeLevelCount: levelCount => updateActive({
       levelCount
+    }),
+    onChangeZones: zones => updateActive({
+      zones
     }),
     // ongedaan maken zet meerdere velden tegelijk terug, dus in één patch
     onRestore: snapshot => updateActive(snapshot),
