@@ -2366,7 +2366,10 @@ function ThreeDPreview({
           const nl = Math.hypot(nx, ny) || 1;
           nx /= nl;
           ny /= nl;
-          const s = makeLabelSprite(`${names && names[c.id] || c.label} · ${fmt(c.lengthM * c.heightM, 1)} m²`, COLORS.wallChip);
+          const wallM2 = wallGrossM2(rooms, room, c);
+          // volledig uitgesneden tegen een aanbouw: geen vlag met 0,0 m²
+          if (wallM2 < 0.005) return;
+          const s = makeLabelSprite(`${names && names[c.id] || c.label} · ${fmt(wallM2, 1)} m²`, COLORS.wallChip);
           s.position.set(mx / PPM + nx * 0.3, base + (c.heightM || h) / 2, my / PPM + ny * 0.3);
           group.add(s);
         } else if (c.kind === "floor") {
@@ -2567,9 +2570,14 @@ function buildVabiXml(project) {
     const verdieping = roomLevel(room);
     const cs = room.constructions || [];
     cs.filter(c => c.kind === "wall").forEach(w => {
-      const idx = relIndex(edgeBearing(room, w.edgeIndex, planNorthDeg));
+      const idx = relIndex(constructionBearing(room, w, planNorthDeg));
       const side = VABI_SIDE_BY_INDEX[idx] || VABI_SIDE_BY_INDEX[0];
-      const gross = w.lengthM * w.heightM;
+      // het stuk dat tegen een aanbouw aan ligt is hier geen gevel meer
+      const shared = sharedWallM(rooms, room, w.edgeIndex ?? 0);
+      const breedte = Math.max(w.lengthM - shared, 0);
+      const gross = breedte * w.heightM;
+      // volledig weggesneden: die muur is geen gevel meer, dus geen hoofdvlak
+      if (gross < 0.005) return;
       const win = windowsAreaM2(w);
       const naam = `${side.code}.${verdieping}.${nextIdx(side.code, verdieping)} | Gevel | ${side.naam}`;
       hoofdvlakken.push({
@@ -2581,7 +2589,7 @@ function buildVabiXml(project) {
         opp: gross,
         bruto: gross,
         netto: Math.max(gross - win, 0),
-        breedte: w.lengthM,
+        breedte,
         hoogte: w.heightM,
         orientatie: idx,
         helling: vabiHelling(90),
@@ -2598,7 +2606,7 @@ function buildVabiXml(project) {
       });
     });
     cs.filter(c => c.kind === "gable").forEach(g => {
-      const idx = relIndex(edgeBearing(room, g.edgeIndex, planNorthDeg));
+      const idx = relIndex(constructionBearing(room, g, planNorthDeg));
       const side = VABI_SIDE_BY_INDEX[idx] || VABI_SIDE_BY_INDEX[0];
       const naam = `${side.code}.${verdieping}.${nextIdx(side.code, verdieping)} | Gevel | ${side.naam}`;
       hoofdvlakken.push({
@@ -2616,7 +2624,7 @@ function buildVabiXml(project) {
       });
     });
     cs.filter(c => c.kind === "roof").forEach(d => {
-      const idx = relIndex(roofPlaneBearing(d.planeIndex, planNorthDeg));
+      const idx = relIndex(constructionBearing(room, d, planNorthDeg));
       const side = VABI_SIDE_BY_INDEX[idx] || VABI_SIDE_BY_INDEX[0];
       const naam = `${side.dak}.${verdieping}.${nextIdx(side.dak, verdieping)} | Dak`;
       hoofdvlakken.push({
@@ -2639,7 +2647,7 @@ function buildVabiXml(project) {
     cs.filter(c => c.kind === "dormer").forEach(d => {
       const g = dormerGeometry(room, d);
       if (!g) return;
-      const idx = relIndex(roofPlaneBearing(d.planeIndex, planNorthDeg));
+      const idx = relIndex(constructionBearing(room, d, planNorthDeg));
       const side = VABI_SIDE_BY_INDEX[idx] || VABI_SIDE_BY_INDEX[0];
       hoofdvlakken.push({
         kind: "gevel",
@@ -3653,8 +3661,8 @@ function zoneNameOf(zones, zoneId) {
   return z ? z.name : zones[0].name;
 }
 // Netto oppervlak van één constructie, zoals de zonelijst het toont.
-function constructionAreaM2(room, c) {
-  if (c.kind === "wall") return Math.max(c.lengthM * c.heightM - windowsAreaM2(c), 0);
+function constructionAreaM2(rooms, room, c) {
+  if (c.kind === "wall") return wallNetM2(rooms, room, c);
   if (c.kind === "dormer") {
     const g = dormerGeometry(room, c);
     return g ? g.frontM2 + g.cheeksM2 + g.roofM2 : 0;
@@ -3687,7 +3695,7 @@ function computeWallNames(project, rooms, planNorthDeg) {
   ordered.forEach(room => {
     (room.constructions || []).forEach(c => {
       if (c.kind !== "wall" && c.kind !== "gable") return;
-      const b = edgeBearing(room, c.edgeIndex, planNorthDeg);
+      const b = constructionBearing(room, c, planNorthDeg);
       if (!Number.isFinite(b)) return;
       const idx = (Math.round((b - front) / 45) % 8 + 8) % 8;
       const side = VABI_SIDE_BY_INDEX[idx];
@@ -3975,6 +3983,80 @@ function clampWindow(win, wallLengthM, wallHeightM) {
 }
 function windowsAreaM2(wall) {
   return (wall.windows || []).reduce((s, w) => s + w.widthM * w.heightM, 0);
+}
+
+// =====================================================================
+// aangrenzende bouwdelen
+//
+// Waar twee vlakken op dezelfde verdieping tegen elkaar aan staan — een
+// aanbouw tegen het huis — is dat stuk muur geen gevel: het zit binnen het
+// gebouw. Het wordt uit beide muren gesneden, aan beide kanten van de
+// aansluiting. Dit is afgeleid uit de tekening, dus het stuk komt vanzelf
+// terug zodra de vlakken uit elkaar geschoven worden.
+// =====================================================================
+const SHARED_WALL_TOL_PX = 1.5; // haaks: ~4 cm speling voor de aansluiting
+const SHARED_WALL_MIN_PX = 4; // korter dan 10 cm is geen aansluiting
+
+// Afstand van een punt tot de lijn van deze muur (loodrecht, in pixels).
+function perpOffsetPx(seg, p) {
+  return (p.x - seg.a.x) * -seg.dir.y + (p.y - seg.a.y) * seg.dir.x;
+}
+// Positie van een punt langs de muur, gemeten vanaf het beginpunt.
+function alongOffsetPx(seg, p) {
+  return (p.x - seg.a.x) * seg.dir.x + (p.y - seg.a.y) * seg.dir.y;
+}
+function mergeSpans(spans) {
+  const out = [];
+  [...spans].sort((x, y) => x[0] - y[0]).forEach(([s, e]) => {
+    const last = out[out.length - 1];
+    if (last && s <= last[1]) last[1] = Math.max(last[1], e);else out.push([s, e]);
+  });
+  return out;
+}
+// De stukken van deze muur die tegen een ander vlak aan liggen, als
+// [begin, eind] langs de muur in pixels.
+function sharedWallSpans(rooms, room, edgeIndex) {
+  if (!rooms || !room?.points?.length) return [];
+  const seg = wallSegment(room, edgeIndex);
+  const spans = [];
+  rooms.forEach(other => {
+    // Een verdieping erboven heeft dezelfde plattegrond: alleen vlakken op
+    // dezelfde verdieping kunnen aan elkaar grenzen.
+    if (other.id === room.id || !other.closed || roomLevel(other) !== roomLevel(room)) return;
+    (other.points || []).forEach((_, j) => {
+      const o = wallSegment(other, j);
+      // op dezelfde lijn? dan liggen beide uiteinden er loodrecht op
+      if (Math.abs(perpOffsetPx(seg, o.a)) > SHARED_WALL_TOL_PX) return;
+      if (Math.abs(perpOffsetPx(seg, o.b)) > SHARED_WALL_TOL_PX) return;
+      const t1 = alongOffsetPx(seg, o.a),
+        t2 = alongOffsetPx(seg, o.b);
+      const s = Math.max(Math.min(t1, t2), 0),
+        e = Math.min(Math.max(t1, t2), seg.lenPx);
+      if (e - s > SHARED_WALL_MIN_PX) spans.push([s, e]);
+    });
+  });
+  return mergeSpans(spans);
+}
+function sharedWallM(rooms, room, edgeIndex) {
+  return sharedWallSpans(rooms, room, edgeIndex).reduce((s, [a, b]) => s + (b - a), 0) / PPM;
+}
+// Bruto gevel: de muur min het uitgesneden stuk. Netto trekt ook de ramen af.
+function wallGrossM2(rooms, room, wall) {
+  const shared = sharedWallM(rooms, room, wall.edgeIndex ?? 0);
+  return Math.max(wall.lengthM - shared, 0) * wall.heightM;
+}
+function wallNetM2(rooms, room, wall) {
+  return Math.max(wallGrossM2(rooms, room, wall) - windowsAreaM2(wall), 0);
+}
+
+// Kompasrichting van een constructie. Normaal volgt die uit de tekening;
+// de adviseur kan hem per constructie overschrijven (bv. een dakvlak dat in
+// werkelijkheid anders ligt dan het rechthoekmodel aanneemt).
+function constructionBearing(room, c, planNorthDeg) {
+  if (Number.isFinite(c.orientationDeg)) return c.orientationDeg;
+  if (c.kind === "roof" || c.kind === "dormer") return roofPlaneBearing(c.planeIndex, planNorthDeg);
+  if (c.kind === "wall" || c.kind === "gable") return edgeBearing(room, c.edgeIndex, planNorthDeg);
+  return null;
 }
 // plan footprint: a thin bar laid along the wall, nudged outwards so it reads
 // as sticking out rather than sitting inside the room
@@ -4877,11 +4959,37 @@ function FloorSketchTab({
     setOpenWindowId(null);
   }
   function deleteConstruction(roomId, constructionId) {
-    onChangeRooms(rooms.map(r => r.id !== roomId ? r : recomputeRoofAreas({
-      ...r,
-      constructions: r.constructions.filter(c => c.id !== constructionId)
-    })));
+    const room = rooms.find(r => r.id === roomId);
+    const target = room && (room.constructions || []).find(c => c.id === constructionId);
+    if (!target) return;
+    onChangeRooms(rooms.map(r => {
+      if (r.id !== roomId) return r;
+      let cs = (r.constructions || []).filter(c => c.id !== constructionId);
+      // Topgevels en dakkapellen bestaan alleen dankzij het dak: verdwijnt
+      // het laatste dakvlak, dan gaan die mee.
+      if (target.kind === "roof" && !cs.some(c => c.kind === "roof")) {
+        cs = cs.filter(c => c.kind !== "gable" && c.kind !== "dormer");
+      }
+      return recomputeRoofAreas({
+        ...r,
+        constructions: cs
+      });
+    }));
     setSelectedConstruction(null);
+    setOpenWindowId(null);
+    flash(`${nameOf(target)} verwijderd.`, "ok");
+  }
+  // Normaal volgt de oriëntatie uit de tekening. Hier legt de adviseur er een
+  // vast op — bijvoorbeeld een dakvlak dat in werkelijkheid anders ligt dan
+  // het rechthoekmodel aanneemt. null zet hem terug op automatisch.
+  function setConstructionOrientation(roomId, constructionId, deg) {
+    onChangeRooms(rooms.map(r => r.id !== roomId ? r : {
+      ...r,
+      constructions: (r.constructions || []).map(c => c.id !== constructionId ? c : {
+        ...c,
+        orientationDeg: Number.isFinite(deg) ? deg : undefined
+      })
+    }));
   }
 
   // ---- editing helpers ----
@@ -5227,7 +5335,8 @@ function FloorSketchTab({
   const totals = rooms.filter(r => r.closed).reduce((acc, r) => {
     if (r.rect) {
       const cs = r.constructions;
-      const wallsGross = cs.filter(c => c.kind === "wall").reduce((s, c) => s + c.lengthM * c.heightM, 0);
+      // bruto is al zonder het stuk dat tegen een aanbouw aan ligt
+      const wallsGross = cs.filter(c => c.kind === "wall").reduce((s, c) => s + wallGrossM2(rooms, r, c), 0);
       const winA = cs.filter(c => c.kind === "wall").reduce((s, c) => s + windowsAreaM2(c), 0);
       const wallsA = Math.max(wallsGross - winA, 0);
       acc.window += winA;
@@ -5274,7 +5383,7 @@ function FloorSketchTab({
   const openZone = openZoneId ? zones.find(z => z.id === openZoneId) : null;
   const zoneRow = zone => {
     const inZone = constructionsInZone(zone.id);
-    const opp = inZone.reduce((s, z) => s + constructionAreaM2(z.room, z.c), 0);
+    const opp = inZone.reduce((s, z) => s + constructionAreaM2(rooms, z.room, z.c), 0);
     return /*#__PURE__*/React.createElement("div", {
       key: zone.id,
       style: {
@@ -5467,7 +5576,7 @@ function FloorSketchTab({
         color: COLORS.textMuted,
         whiteSpace: "nowrap"
       }
-    }, fmt(constructionAreaM2(room, c)), " m²")));
+    }, fmt(constructionAreaM2(rooms, room, c)), " m²")));
   })() : /*#__PURE__*/React.createElement(React.Fragment, null, zones.map(zoneRow), /*#__PURE__*/React.createElement("div", {
     style: {
       borderTop: `1px solid ${COLORS.panelBorder}`,
@@ -5837,7 +5946,10 @@ function FloorSketchTab({
       const midX = (p0.x + p1.x) / 2;
       const top = p0.y,
         bot = p3.y;
-      const bearings = [0, 1].map(i => roofPlaneBearing(i, planNorthDeg));
+      const bearings = [0, 1].map(i => {
+        const rc = room.constructions.find(c => c.kind === "roof" && c.planeIndex === i);
+        return rc ? constructionBearing(room, rc, planNorthDeg) : roofPlaneBearing(i, planNorthDeg);
+      });
       return /*#__PURE__*/React.createElement("g", {
         pointerEvents: "none"
       }, /*#__PURE__*/React.createElement("rect", {
@@ -5952,6 +6064,42 @@ function FloorSketchTab({
           edgeIndex: i
         }),
         onPointerLeave: () => setHoverWall(null)
+      }));
+    }), room.closed && room.points.map((_, i) => {
+      // Waar een ander vlak tegen deze muur staat is er geen gevel: het stuk
+      // wordt weggepoetst en gestreept getekend, zodat je de uitsnede ziet.
+      const spans = sharedWallSpans(rooms, room, i);
+      if (!spans.length) return null;
+      const seg = wallSegment(room, i);
+      const at = t => ({
+        x: seg.a.x + seg.dir.x * t,
+        y: seg.a.y + seg.dir.y * t
+      });
+      return /*#__PURE__*/React.createElement("g", {
+        key: "cut" + i,
+        pointerEvents: "none"
+      }, spans.map(([s0, e0], k) => {
+        const p1 = at(s0),
+          p2 = at(e0);
+        return /*#__PURE__*/React.createElement("g", {
+          key: k
+        }, /*#__PURE__*/React.createElement("line", {
+          x1: p1.x,
+          y1: p1.y,
+          x2: p2.x,
+          y2: p2.y,
+          stroke: COLORS.canvasBg,
+          strokeWidth: 4.5
+        }), /*#__PURE__*/React.createElement("line", {
+          x1: p1.x,
+          y1: p1.y,
+          x2: p2.x,
+          y2: p2.y,
+          stroke: COLORS.textMuted,
+          strokeWidth: 1.2,
+          strokeDasharray: "5 4",
+          opacity: 0.8
+        }));
       }));
     }), room.rect && room.constructions.filter(c => c.kind === "wall").map(wall => (wall.windows || []).map(win => {
       const wp = windowPlan(room, wall, win);
@@ -6401,17 +6549,36 @@ function FloorSketchTab({
     }
   }, nameOf(selectedConstructionObj), " \u2014 details"), (() => {
     const c = selectedConstructionObj;
-    const b = c.kind === "roof" ? roofPlaneBearing(c.planeIndex, planNorthDeg) : c.kind === "wall" || c.kind === "gable" ? edgeBearing(selectedConstructionRoom, c.edgeIndex, planNorthDeg) : c.kind === "dormer" ? roofPlaneBearing(c.planeIndex, planNorthDeg) : null;
-    return Number.isFinite(b) ? /*#__PURE__*/React.createElement(Row, {
+    // Een vloer heeft geen kompasrichting; de rest wel, en die is te
+    // overschrijven als de tekening de werkelijkheid niet goed vangt.
+    if (c.kind !== "wall" && c.kind !== "gable" && c.kind !== "roof" && c.kind !== "dormer") return null;
+    const auto = constructionBearing(selectedConstructionRoom, {
+      ...c,
+      orientationDeg: undefined
+    }, planNorthDeg);
+    const fixed = Number.isFinite(c.orientationDeg);
+    return /*#__PURE__*/React.createElement(Field, {
       label: "Ori\xEBntatie",
-      value: `${orientationLabel(b)} · ${fmt(b, 0)}°`
-    }) : /*#__PURE__*/React.createElement("div", {
+      source: fixed ? "manual" : undefined
+    }, /*#__PURE__*/React.createElement("select", {
+      value: fixed ? String(c.orientationDeg) : "",
+      onChange: e => setConstructionOrientation(selectedConstruction.roomId, c.id, e.target.value === "" ? null : Number(e.target.value)),
+      style: {
+        ...inputBase,
+        padding: "7px 8px"
+      }
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, Number.isFinite(auto) ? `Uit de tekening \u2014 ${orientationName(auto)}` : "Uit de tekening \u2014 nog onbekend"), ORIENTATION_OPTIONS.map(o => /*#__PURE__*/React.createElement("option", {
+      key: o.deg,
+      value: String(o.deg)
+    }, o.label))), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 11,
         color: COLORS.textMuted,
-        marginBottom: 6
+        marginTop: 4
       }
-    }, "Ori\xEBntatie onbekend \u2014 markeer eerst een voorgevel.");
+    }, fixed ? `Vastgezet \u2014 de tekening zelf zou ${Number.isFinite(auto) ? orientationName(auto) : "niets"} zeggen.` : Number.isFinite(auto) ? `${orientationLabel(auto)} · ${fmt(auto, 0)}°` : "Markeer eerst een voorgevel, of kies hier zelf een richting."));
   })(), (() => {
     // Bij \u00e9\u00e9n rekenzone valt er niets te kiezen: dan staat er alleen waar de
     // constructie in valt. Zodra er een tweede is, wordt het een keuze.
@@ -6448,23 +6615,41 @@ function FloorSketchTab({
       heightM: v
     })
   })), (() => {
-    const gross = selectedConstructionObj.lengthM * selectedConstructionObj.heightM;
-    const win = windowsAreaM2(selectedConstructionObj);
-    return win > 0 ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Row, {
-      label: "Bruto oppervlak",
+    const c = selectedConstructionObj;
+    const full = c.lengthM * c.heightM;
+    // uitgesneden waar een ander vlak (bv. een aanbouw) tegen deze gevel staat
+    const sharedM = sharedWallM(rooms, selectedConstructionRoom, c.edgeIndex ?? 0);
+    const cut = sharedM * c.heightM;
+    const gross = Math.max(full - cut, 0);
+    const win = windowsAreaM2(c);
+    if (cut <= 0 && win <= 0) return /*#__PURE__*/React.createElement(Row, {
+      label: "Oppervlak",
+      value: `${fmt(full)} m²`,
+      accent: true
+    });
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Row, {
+      label: "Volledige muur",
+      value: `${fmt(full)} m²`
+    }), cut > 0 && /*#__PURE__*/React.createElement(Row, {
+      label: `Af: aangrenzend (${fmt(sharedM)} m)`,
+      value: `− ${fmt(cut)} m²`
+    }), cut > 0 && /*#__PURE__*/React.createElement(Row, {
+      label: "Bruto gevel",
       value: `${fmt(gross)} m²`
-    }), /*#__PURE__*/React.createElement(Row, {
+    }), win > 0 && /*#__PURE__*/React.createElement(Row, {
       label: "Af: ramen",
       value: `− ${fmt(win)} m²`
     }), /*#__PURE__*/React.createElement(Row, {
       label: "Netto oppervlak",
       value: `${fmt(Math.max(gross - win, 0))} m²`,
       accent: true
-    })) : /*#__PURE__*/React.createElement(Row, {
-      label: "Oppervlak",
-      value: `${fmt(gross)} m²`,
-      accent: true
-    });
+    }), cut > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: COLORS.textMuted,
+        marginTop: 2
+      }
+    }, "Dit stuk grenst aan een ander vlak op deze verdieping en telt niet als gevel."));
   })(), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
@@ -6742,29 +6927,36 @@ function FloorSketchTab({
         color: COLORS.danger,
         marginTop: 4
       }
-    }, "Past niet: ", fmt(g.insetM + g.dRidge, 2), " m nodig tot de nok, beschikbaar ", fmt(g.halfSpanM, 2), " m.")), /*#__PURE__*/React.createElement("button", {
-      style: {
-        ...btnStyle(false, true),
-        fontSize: 12,
-        padding: "5px 10px",
-        marginTop: 8
-      },
-      onClick: () => deleteConstruction(selectedConstruction.roomId, c.id)
-    }, "Dakkapel verwijderen"));
+    }, "Past niet: ", fmt(g.insetM + g.dRidge, 2), " m nodig tot de nok, beschikbaar ", fmt(g.halfSpanM, 2), " m.")));
   })(), /*#__PURE__*/React.createElement(Field, {
     label: "Export opties",
     source: "manual"
   }, /*#__PURE__*/React.createElement("select", {
     style: inputBase,
     disabled: true
-  }, /*#__PURE__*/React.createElement("option", null, "Later gespecificeerd (EPA export)"))), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("option", null, "Later gespecificeerd (EPA export)"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      gap: 8,
+      marginTop: 4
+    }
+  }, /*#__PURE__*/React.createElement("button", {
     style: {
       ...btnStyle(false),
       fontSize: 12,
       padding: "5px 10px"
     },
     onClick: () => setSelectedConstruction(null)
-  }, "Close")), activeRoom && !activeRoom.closed && /*#__PURE__*/React.createElement("div", {
+  }, "Close"), /*#__PURE__*/React.createElement("button", {
+    style: {
+      ...btnStyle(false, true),
+      fontSize: 12,
+      padding: "5px 10px"
+    },
+    title: "Deze constructie uit de opname halen",
+    onClick: () => deleteConstruction(selectedConstruction.roomId, selectedConstructionObj.id)
+  }, CONSTRUCTION_KIND_LABELS[selectedConstructionObj.kind] || "Constructie", " verwijderen"))), activeRoom && !activeRoom.closed && /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "14px 16px",
       borderBottom: `1px solid ${COLORS.panelBorder}`
